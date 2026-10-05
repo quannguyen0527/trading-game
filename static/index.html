@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trading Game</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .row { display: flex; gap: 24px; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 240px; }
+    table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+    td, th { padding: 2px 8px; text-align: right; border-bottom: 1px solid #ddd; }
+    .bid { color: #137333; } .ask { color: #c5221f; }
+    #error { color: #c5221f; min-height: 1.2em; }
+    input { width: 80px; }
+  </style>
+</head>
+<body>
+  <h1>Trading Game <small id="last"></small></h1>
+
+  <form id="join">
+    Room <input id="room" value="lobby" /> Name <input id="name" placeholder="your name" />
+    <button>Join</button>
+  </form>
+
+  <div id="game" hidden>
+    <p id="me"></p>
+    <form id="order">
+      <select id="side"><option value="buy">Buy</option><option value="sell">Sell</option></select>
+      Qty <input id="qty" type="number" min="1" value="10" />
+      Price $ <input id="price" type="number" step="0.01" placeholder="blank = market" />
+      <button>Place order</button>
+    </form>
+    <p id="error"></p>
+
+    <div class="row">
+      <div><h3>Order book</h3><table id="book"></table></div>
+      <div><h3>Leaderboard</h3><table id="leaders"></table></div>
+    </div>
+    <div class="row">
+      <div><h3>Your open orders</h3><table id="mine"></table></div>
+      <div><h3>Recent trades</h3><table id="trades"></table></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const money = (cents) => "$" + (cents / 100).toFixed(2);
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    let ws;
+
+    $("join").onsubmit = (e) => {
+      e.preventDefault();
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const url = `${proto}://${location.host}/ws/${encodeURIComponent($("room").value)}?name=${encodeURIComponent($("name").value)}`;
+      ws = new WebSocket(url);
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "error") $("error").textContent = msg.message;
+        if (msg.type === "state") { $("error").textContent = ""; render(msg); }
+      };
+      ws.onclose = () => { $("error").textContent ||= "Disconnected."; };
+    };
+
+    $("order").onsubmit = (e) => {
+      e.preventDefault();
+      const price = $("price").value;
+      ws.send(JSON.stringify({
+        type: "order",
+        side: $("side").value,
+        qty: parseInt($("qty").value, 10),
+        price: price === "" ? null : Math.round(parseFloat(price) * 100),
+      }));
+    };
+
+    function cancel(id) { ws.send(JSON.stringify({ type: "cancel", order_id: id })); }
+
+    function render({ public: pub, you }) {
+      $("join").hidden = true;
+      $("game").hidden = false;
+      $("last").textContent = "· last " + money(pub.last_price);
+      $("me").textContent = `${you.name} — cash ${money(you.cash)} · shares ${you.shares} · net worth ${money(you.net_worth)}`;
+
+      const asks = pub.book.asks.slice().reverse()
+        .map((l) => `<tr class="ask"><td>${money(l.price)}</td><td>${l.qty}</td></tr>`).join("");
+      const bids = pub.book.bids
+        .map((l) => `<tr class="bid"><td>${money(l.price)}</td><td>${l.qty}</td></tr>`).join("");
+      $("book").innerHTML = "<tr><th>Price</th><th>Qty</th></tr>" + asks + bids;
+
+      $("leaders").innerHTML = pub.leaderboard
+        .map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}</td><td>${money(r.net_worth)}</td></tr>`).join("");
+
+      $("mine").innerHTML = you.open_orders
+        .map((o) => `<tr><td>${o.side}</td><td>${o.remaining}</td><td>${money(o.price)}</td>
+                     <td><button onclick="cancel(${o.id})">Cancel</button></td></tr>`).join("");
+
+      $("trades").innerHTML = pub.trades.slice().reverse()
+        .map((t) => `<tr><td>${esc(t.buyer)} ← ${esc(t.seller)}</td><td>${t.qty}</td><td>${money(t.price)}</td></tr>`).join("");
+    }
+  </script>
+</body>
+</html>
