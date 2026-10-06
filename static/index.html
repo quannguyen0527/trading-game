@@ -13,10 +13,14 @@
     .bid { color: #137333; } .ask { color: #c5221f; }
     #error { color: #c5221f; min-height: 1.2em; }
     input { width: 80px; }
+    #round { display: flex; gap: 16px; align-items: center; padding: 8px 12px; background: #f1f3f4; border-radius: 6px; }
+    #clock { font-size: 1.4em; font-variant-numeric: tabular-nums; }
+    #news li { margin-bottom: 4px; }
+    .up { color: #137333; } .down { color: #c5221f; }
   </style>
 </head>
 <body>
-  <h1>Trading Game <small id="last"></small></h1>
+  <h1>Bayou Energy (BYOU) <small id="last"></small></h1>
 
   <form id="join">
     Room <input id="room" value="lobby" /> Name <input id="name" placeholder="your name" />
@@ -24,6 +28,11 @@
   </form>
 
   <div id="game" hidden>
+    <div id="round">
+      <span id="clock"></span>
+      <span id="status"></span>
+      <button id="start">Start round</button>
+    </div>
     <p id="me"></p>
     <form id="order">
       <select id="side"><option value="buy">Buy</option><option value="sell">Sell</option></select>
@@ -32,6 +41,8 @@
       <button>Place order</button>
     </form>
     <p id="error"></p>
+
+    <div><h3>News</h3><ul id="news"></ul></div>
 
     <div class="row">
       <div><h3>Order book</h3><table id="book"></table></div>
@@ -48,6 +59,14 @@
     const money = (cents) => "$" + (cents / 100).toFixed(2);
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     let ws;
+    let roundEndsAt = 0;  // local time the round ends, from the server's seconds_left
+
+    setInterval(() => {
+      if (roundEndsAt) {
+        const s = Math.max(0, Math.ceil((roundEndsAt - Date.now()) / 1000));
+        $("clock").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      }
+    }, 250);
 
     $("join").onsubmit = (e) => {
       e.preventDefault();
@@ -73,12 +92,31 @@
       }));
     };
 
+    $("start").onclick = () => ws.send(JSON.stringify({ type: "start" }));
+
     function cancel(id) { ws.send(JSON.stringify({ type: "cancel", order_id: id })); }
 
     function render({ public: pub, you }) {
       $("join").hidden = true;
       $("game").hidden = false;
       $("last").textContent = "· last " + money(pub.last_price);
+      const running = pub.phase === "running";
+      roundEndsAt = running ? Date.now() + pub.seconds_left * 1000 : 0;
+      if (!running) $("clock").textContent = "";
+      $("start").hidden = running;
+      $("order").hidden = !running;
+      $("status").textContent =
+        running ? "Round in progress: read the news, trade before everyone else."
+        : pub.phase === "finished" ? `Round over! Fair value was ${money(pub.fair_value)}; shares are valued at that price.`
+        : "Press Start when everyone has joined. Shares settle at a hidden fair value that news moves.";
+
+      $("news").innerHTML = pub.news.slice().reverse().map((n) => {
+        const t = `${Math.floor(n.second / 60)}:${String(n.second % 60).padStart(2, "0")}`;
+        const impact = n.change_pct === null ? ""
+          : ` <b class="${n.change_pct > 0 ? "up" : "down"}">${n.change_pct > 0 ? "+" : ""}${n.change_pct}%</b>`;
+        return `<li>[${t}] ${esc(n.headline)}${impact}</li>`;
+      }).join("") || "<li>No news yet.</li>";
+
       $("me").textContent = `${you.name} — cash ${money(you.cash)} · shares ${you.shares} · net worth ${money(you.net_worth)}`;
 
       const asks = pub.book.asks.slice().reverse()

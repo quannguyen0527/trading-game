@@ -3,6 +3,7 @@ FastAPI server: players connect over a WebSocket and trade in real time.
 
 Connect:  ws://localhost:8000/ws/{room_id}?name=alice
 Send JSON messages:
+  {"type": "start"}                                                     # start a new round
   {"type": "order", "side": "buy" | "sell", "qty": 5, "price": 10050}   # price in cents; omit for market sell
   {"type": "cancel", "order_id": 3}
 Receive JSON messages:
@@ -11,9 +12,12 @@ Receive JSON messages:
 
 The server runs on a single asyncio event loop, and no handler awaits while it is
 changing a room, so two players' orders can never interleave half-way through.
+Each running round also has a clock task on the same loop that calls room.tick()
+once a second, so news and the end of the round arrive without anyone acting.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Dict
@@ -21,8 +25,9 @@ from typing import Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from .game import OrderRejected, Room
+from .game import OrderRejected, Phase, Room
 
+TICK_SECONDS = 1.0
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -30,6 +35,8 @@ app = FastAPI(title="Trading Game")
 rooms: Dict[str, Room] = {}
 # room id -> player name -> that player's open WebSocket
 connections: Dict[str, Dict[str, WebSocket]] = {}
+# room id -> the task that ticks that room's clock while a round runs
+clock_tasks: Dict[str, asyncio.Task] = {}
 
 
 @app.get("/")
@@ -79,8 +86,21 @@ def _handle(room: Room, name: str, message: object) -> None:
         room.place_order(name, message.get("side"), message.get("qty"), message.get("price"))
     elif kind == "cancel":
         room.cancel(name, message.get("order_id"))
+    elif kind == "start":
+        room.start()
+        task = clock_tasks.get(room.id)
+        # If last round's task hasn't exited yet, it keeps running and serves this round.
+        if task is None or task.done():
+            clock_tasks[room.id] = asyncio.create_task(_run_clock(room))
     else:
         raise OrderRejected(f"unknown message type: {kind!r}")
+
+
+async def _run_clock(room: Room) -> None:
+    while room.phase == Phase.RUNNING:
+        await asyncio.sleep(TICK_SECONDS)
+        if room.tick():
+            await _broadcast(room)
 
 
 async def _broadcast(room: Room) -> None:
