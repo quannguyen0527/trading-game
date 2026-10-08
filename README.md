@@ -12,7 +12,7 @@ Each round lasts 3 minutes. The stock has a **hidden fair value**, and every 15�
 
 You're never alone: every room has three **bot traders**. A market maker always quotes a buy and a sell price, a news trader reacts to headlines a few seconds late, and a noise trader adds random small orders. Beat the news bot to the market maker's stale quotes to win.
 
-**Tech:** Python 3.13 · FastAPI · WebSockets · vanilla JavaScript · HTML canvas · unittest
+**Tech:** Python 3.13 · FastAPI · WebSockets · Claude API · vanilla JavaScript · HTML canvas · unittest
 
 ![End of a round: the price players traded at (blue) against the hidden fair value revealed at the bell (dashed gold)](docs/screenshot.jpg)
 
@@ -22,11 +22,12 @@ You're never alone: every room has three **bot traders**. A market maker always 
 - **Limit and market orders**, partial fills, cancels, and aggregated order-book depth.
 - **Pre-trade risk checks:** cash and shares committed to open orders are reserved, so players can't double-spend.
 - **Timed rounds with news events** that move a hidden fair value; open orders are cancelled and shares settled at fair value when the round ends.
+- **AI trading coach:** after each round, Claude reviews every trade you made against the hidden fair value and writes a short personal debrief, naming real trading concepts your round illustrated.
 - **Bot traders** (market maker, news trader, noise trader) that trade through the same risk checks as humans.
 - **Real-time updates:** every player sees the order book, trades, news, and leaderboard update instantly.
 - **Live price chart drawn on a plain `<canvas>`** (no chart library). When the round ends it overlays the hidden fair value, so you can see how fast the market priced in each headline.
 - **Trading-terminal UI:** order book with depth bars (click a price to use it), one-click Buy/Sell, position and P&L panel, and a layout that works on phones.
-- **43 unit and integration tests**, run by GitHub Actions on every push, including two simulated players trading over live WebSocket connections, a fake clock that plays a full 3-minute round instantly, and a check that a full round of bot trading never creates or destroys cash or shares.
+- **53 unit and integration tests**, run by GitHub Actions on every push, including two simulated players trading over live WebSocket connections, a fake clock that plays a full 3-minute round instantly, and a check that a full round of bot trading never creates or destroys cash or shares.
 
 ## How the matching engine works
 
@@ -44,6 +45,18 @@ You're never alone: every room has three **bot traders**. A market maker always 
 - An incoming order trades against the opposite side while the prices cross (bid ≥ ask). Each trade executes at the **resting order's price**.
 - **Lazy cancellation:** cancelling only marks the order. It is discarded when it reaches the top of its heap, so cancel is O(1) instead of an O(n) heap search.
 - **Prices are integer cents**, avoiding floating-point errors (in floating point, `0.1 + 0.2 != 0.3`).
+
+## The AI coach
+
+When a round ends, each player can ask for feedback. The server builds a plain-text report of facts from the round (every trade the player made with its time and the fair value at that moment, each headline and its real effect, the final standings) and sends it to Claude with a short coaching brief. The reply comes back over the player's WebSocket.
+
+- **Grounded, not made up.** The model only sees the factual report and is told to use only its numbers, so feedback like "at 1:12 you bought at $96 when shares were worth $104" is real.
+- **Never blocks the game.** The API call runs as a background asyncio task; other players' orders keep flowing while the coach writes.
+- **Cost controls for a public demo.** One review per player per round (repeat clicks reuse it), a server-wide hourly cap (`COACH_MAX_PER_HOUR`, default 10), and the feature hides itself when no API key is set. The cap lives in memory and resets when the server restarts, so the hard ceiling is a monthly spend limit set in the Anthropic Console; once it's reached, players see a friendly "coach unavailable" message and the game is unaffected.
+- **Failure-tolerant.** Rate limits, network errors and refusals become a friendly message, and a failed review can be retried. Server-side fallbacks retry on another model if the first declines.
+- **Tested without the network.** The tests swap in a fake Claude client, so the suite is free, fast and deterministic.
+
+Configuration (environment variables): `ANTHROPIC_API_KEY` turns the coach on; `COACH_MODEL` (default `claude-opus-5-5`) and `COACH_MAX_PER_HOUR` are optional.
 
 ## Design decisions
 
@@ -77,6 +90,8 @@ python3 -m venv .venv
 
 Open http://localhost:8000 in two browser tabs, join the same room with different names, press **Start round**, and trade.
 
+To turn on the AI coach locally, set your key first: `export ANTHROPIC_API_KEY=...`
+
 Run the tests:
 
 ```bash
@@ -89,9 +104,10 @@ Run the tests:
 engine/order_book.py   matching engine (heaps, price-time priority)
 server/game.py         rounds, news, accounts, risk checks, settlement, leaderboard
 server/bots.py         market maker, news trader and noise trader bots
+server/coach.py        AI coach: round report + Claude API call, caching and limits
 server/app.py          FastAPI + WebSocket server
 static/                browser client (index.html, style.css, app.js with the canvas chart)
-tests/                 engine, game-rule, bot and WebSocket tests
+tests/                 engine, game-rule, bot, coach and WebSocket tests
 ```
 
 ## Roadmap

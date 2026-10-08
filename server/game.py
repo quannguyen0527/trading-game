@@ -94,6 +94,7 @@ class Room:
         self.accounts: Dict[str, Account] = {}
         self.bots: List[Bot] = []  # see server/bots.py
         self.phase = Phase.WAITING
+        self.round_number = 0
         self._reset_market()
 
     # ---------- rounds ----------
@@ -103,6 +104,7 @@ class Room:
         if self.phase == Phase.RUNNING:
             raise OrderRejected("a round is already running")
         self._reset_market()
+        self.round_number += 1
         for account in self.accounts.values():
             account.cash, account.shares = STARTING_CASH, STARTING_SHARES
         self.phase = Phase.RUNNING
@@ -213,6 +215,7 @@ class Room:
         return {
             "room": self.id,
             "phase": self.phase.value,
+            "round_number": self.round_number,
             "seconds_left": self.seconds_left(),
             "round_seconds": ROUND_SECONDS,
             "last_price": self.last_price,
@@ -268,6 +271,7 @@ class Room:
         self.news: List[NewsItem] = []
         self.last_price = STARTING_PRICE
         self.fair_value = STARTING_PRICE
+        self.fills: List[Tuple[int, Trade]] = []  # (second, trade): every trade this round
         self.price_history: List[Tuple[int, int]] = []  # (second, last price), one per second
         self.fair_history: List[Tuple[int, int]] = []   # (second, fair value) at each headline
 
@@ -306,5 +310,6 @@ class Room:
         seller.cash += cost
         seller.shares -= trade.qty
         self.last_price = trade.price
+        self.fills.append((int(self.clock() - self.started_at), trade))
         self.trades.append(trade)
         del self.trades[:-MAX_RECENT_TRADES]

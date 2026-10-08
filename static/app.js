@@ -17,7 +17,8 @@ let ws;
 let state = null;        // last {public, you} from the server
 let roundEndsAt = 0;     // local time the round ends, from the server's seconds_left
 let lastShownPrice = null;
-let newsSeen = null; // how many headlines were already on screen; null before the first render
+let newsSeen = null;
+let coachRound = 0;       // round the coach panel currently shows // how many headlines were already on screen; null before the first render
 
 // ---------- connection ----------
 
@@ -31,6 +32,7 @@ $("join").onsubmit = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "error") toast(msg.message);
     if (msg.type === "state") render(msg);
+    if (msg.type === "coach") showCoach(msg);
   };
   ws.onclose = () => {
     if (state) $("banner").textContent = "Disconnected from the server. Refresh the page to rejoin with the same name.";
@@ -40,6 +42,12 @@ $("join").onsubmit = (e) => {
 const send = (msg) => ws && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
 
 $("start").onclick = () => send({ type: "start" });
+
+$("coach-ask").onclick = () => {
+  send({ type: "coach" });
+  $("coach-ask").hidden = true;
+  setCoachText("Reviewing your trades", "thinking");
+};
 
 document.querySelectorAll("#order [data-side]").forEach((btn) => {
   btn.onclick = () => {
@@ -74,6 +82,7 @@ function render(msg) {
   $("room-name").textContent = `Room: ${pub.room}`;
 
   renderRound(pub, you);
+  renderCoach(pub);
   renderQuote(pub);
   renderPosition(you);
   renderBook(pub.book);
@@ -196,6 +205,35 @@ function renderTrades(trades) {
     : trades.slice().reverse().map((t) =>
         `<tr><td>${label(t.buyer)} <span class="muted">bought from</span> ${label(t.seller)}</td>` +
         `<td>${t.qty}</td><td>${money(t.price)}</td></tr>`).join("");
+}
+
+// ---------- AI coach ----------
+
+function renderCoach(pub) {
+  $("coach").hidden = !(pub.coach_enabled && pub.phase === "finished");
+  if (pub.round_number !== coachRound) {
+    // A different round: clear the previous review.
+    coachRound = pub.round_number;
+    $("coach-ask").hidden = false;
+    $("coach-text").hidden = true;
+  }
+}
+
+function showCoach(msg) {
+  if (msg.round !== coachRound) return; // a late reply about an earlier round
+  if (msg.error) {
+    setCoachText(msg.error.charAt(0).toUpperCase() + msg.error.slice(1) + ".", "error");
+    $("coach-ask").hidden = false;
+  } else {
+    setCoachText(msg.text, "");
+  }
+}
+
+function setCoachText(text, cls) {
+  const el = $("coach-text");
+  el.textContent = text; // plain text only: the reply is never treated as HTML
+  el.className = "coach-text " + cls;
+  el.hidden = false;
 }
 
 // ---------- clock ----------

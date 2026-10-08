@@ -6,9 +6,11 @@ Send JSON messages:
   {"type": "start"}                                                     # start a new round
   {"type": "order", "side": "buy" | "sell", "qty": 5, "price": 10050}   # price in cents; omit for market sell
   {"type": "cancel", "order_id": 3}
+  {"type": "coach"}                                                     # ask the AI coach to review your last round
 Receive JSON messages:
   {"type": "state", "public": {...}, "you": {...}}   # after every change
   {"type": "error", "message": "..."}                 # only to the player who caused it
+  {"type": "coach", "round": 2, "text": "..."}        # the coach's review (or "error": "..."), only to you
 
 The server runs on a single asyncio event loop, and no handler awaits while it is
 changing a room, so two players' orders can never interleave half-way through.
@@ -25,13 +27,14 @@ import asyncio
 import re
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .bots import add_bots
+from .coach import CoachUnavailable, coach_from_env
 from .game import OrderRejected, Phase, Room
 
 TICK_SECONDS = 1.0
@@ -48,6 +51,9 @@ rooms: Dict[str, Room] = {}
 connections: Dict[str, Dict[str, WebSocket]] = {}
 # room id -> the task that ticks that room's clock while a round runs
 clock_tasks: Dict[str, asyncio.Task] = {}
+coach = coach_from_env()
+# Coach requests in flight. asyncio only keeps weak references to tasks, so we hold them here.
+background_tasks: Set[asyncio.Task] = set()
 
 
 @app.get("/")
@@ -99,6 +105,12 @@ async def play(websocket: WebSocket, room_id: str, name: str = "") -> None:
             if count > MAX_MESSAGES_PER_SECOND:
                 if count == MAX_MESSAGES_PER_SECOND + 1:
                     await websocket.send_json({"type": "error", "message": "slow down: too many orders"})
+                continue
+            if isinstance(message, dict) and message.get("type") == "coach":
+                # Runs in the background so this player's other messages aren't held up.
+                task = asyncio.create_task(_send_review(websocket, room, name))
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
                 continue
             try:
                 _handle(room, name, message)
@@ -152,8 +164,22 @@ def _delete_if_empty(room: Room) -> None:
         clock_tasks.pop(room.id, None)
 
 
+async def _send_review(websocket: WebSocket, room: Room, name: str) -> None:
+    round_number = room.round_number
+    try:
+        text = await coach.review(room, name)
+        reply = {"type": "coach", "round": round_number, "text": text}
+    except CoachUnavailable as e:
+        reply = {"type": "coach", "round": round_number, "error": str(e)}
+    try:
+        await websocket.send_json(reply)
+    except Exception:
+        pass  # the player left while the coach was writing
+
+
 async def _broadcast(room: Room) -> None:
     public = room.public_state()
+    public["coach_enabled"] = coach.enabled
     for player, ws in list(connections.get(room.id, {}).items()):
         try:
             await ws.send_json({"type": "state", "public": public, "you": room.private_state(player)})

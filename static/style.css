@@ -99,6 +99,29 @@ table { width: 100%; border-collapse: collapse; }
 .banner.result { border-color: var(--fair); }
 .banner:empty { display: none; }
 
+/* ---------- AI coach ---------- */
+
+.coach {
+  margin: 14px 20px 0; padding: 14px 16px; border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--border);
+}
+.coach-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.coach-head > div { flex: 1; min-width: 180px; }
+.coach-badge {
+  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #9b6bff); color: #fff; font-weight: 700; font-size: 13px;
+}
+.coach-title { font-weight: 600; }
+.coach-text {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+  white-space: pre-wrap; line-height: 1.6; max-width: 80ch;
+}
+.coach-text.error { color: var(--down); }
+.coach-text.thinking { color: var(--muted); }
+.coach-text.thinking::after { content: ""; animation: dots 1.2s steps(4) infinite; }
+@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+@media (max-width: 680px) { .coach { margin: 12px 12px 0; } }
+
 /* ---------- main grid ---------- */
 
 .layout {
