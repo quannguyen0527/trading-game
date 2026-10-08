@@ -25,6 +25,7 @@ from typing import Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from .bots import add_bots
 from .game import OrderRejected, Phase, Room
 
 TICK_SECONDS = 1.0
@@ -56,7 +57,10 @@ async def play(websocket: WebSocket, room_id: str, name: str = "") -> None:
         await _close_with_error(websocket, f"'{name}' is already playing in this room")
         return
 
-    room = rooms.setdefault(room_id, Room(room_id))
+    room = rooms.get(room_id)
+    if room is None:
+        room = rooms[room_id] = Room(room_id)
+        add_bots(room)
     room.join(name)
     room_conns[name] = websocket
     await _broadcast(room)

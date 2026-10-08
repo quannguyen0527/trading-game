@@ -22,9 +22,12 @@ import random
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 from engine import OrderBook, Side, Trade
+
+if TYPE_CHECKING:
+    from .bots import Bot
 
 STARTING_CASH = 10_000_00  # $10,000.00
 STARTING_SHARES = 100
@@ -88,6 +91,7 @@ class Room:
         self.clock = clock
         self.rng = rng or random.Random()
         self.accounts: Dict[str, Account] = {}
+        self.bots: List[Bot] = []  # see server/bots.py
         self.phase = Phase.WAITING
         self._reset_market()
 
@@ -104,9 +108,11 @@ class Room:
         self.started_at = self.clock()
         self.ends_at = self.started_at + ROUND_SECONDS
         self._schedule_news(self.started_at)
+        for bot in self.bots:
+            bot.reset(self.started_at)
 
     def tick(self) -> bool:
-        """Release any news that is due and end the round on time.
+        """Release any news that is due, let the bots trade, and end the round on time.
 
         Called about once a second by the server. Returns True if anything changed.
         """
@@ -120,7 +126,9 @@ class Room:
             changed = True
         if now >= self.ends_at:
             self._finish()
-            changed = True
+            return True
+        for bot in self.bots:
+            changed |= bot.act(self, now)
         return changed
 
     def seconds_left(self) -> int:

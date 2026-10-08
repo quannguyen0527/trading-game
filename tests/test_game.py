@@ -207,6 +207,8 @@ class TestWebSocket(unittest.TestCase):
             alice.send_json({"type": "start"})
             self.assertEqual(alice.receive_json()["public"]["phase"], "running")
             final = alice.receive_json()["public"]
+            while final["phase"] == "running":  # skip updates caused by bot trades
+                final = alice.receive_json()["public"]
             self.assertEqual(final["phase"], "finished")
             self.assertEqual(final["fair_value"], STARTING_PRICE)
 
