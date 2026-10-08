@@ -73,6 +73,15 @@ class TestRoom(unittest.TestCase):
                 with self.assertRaises(OrderRejected):
                     self.room.place_order("alice", side, qty, price)
 
+    def test_market_sell_with_no_buyers_is_rejected(self):
+        with self.assertRaises(OrderRejected):
+            self.room.place_order("alice", "sell", 1, None)
+
+    def test_market_sell_fills_against_best_bid(self):
+        self.room.place_order("bob", "buy", 5, 99_00)
+        trades = self.room.place_order("alice", "sell", 5, None)
+        self.assertEqual([(t.price, t.qty) for t in trades], [(99_00, 5)])
+
     def test_leaderboard_sorted_by_net_worth(self):
         self.room.join("carol")
         self.room.place_order("alice", "sell", 10, 150_00)
@@ -156,6 +165,27 @@ class TestRounds(unittest.TestCase):
         self.assertEqual((alice.cash, alice.shares), (STARTING_CASH, STARTING_SHARES))
         self.assertEqual(self.room.news, [])
         self.assertEqual(self.room.fair_value, STARTING_PRICE)
+
+    def test_price_history_has_one_point_per_second(self):
+        self.room.start()
+        for _ in range(5):
+            self.clock.now += 1
+            self.room.tick()
+            self.room.tick()  # a second tick in the same second adds nothing
+        seconds = [s for s, _ in self.room.public_state()["price_history"]]
+        self.assertEqual(seconds, [0, 1, 2, 3, 4, 5])
+
+    def test_fair_value_history_hidden_until_round_ends(self):
+        self.room.start()
+        self.clock.now += NEWS_EVERY[1]
+        self.room.tick()
+        self.assertIsNone(self.room.public_state()["fair_history"])
+
+        self.clock.now += ROUND_SECONDS
+        self.room.tick()
+        state = self.room.public_state()
+        self.assertEqual(state["fair_history"][-1][1], state["fair_value"])
+        self.assertEqual(state["price_history"][-1][0], ROUND_SECONDS)
 
     def test_cannot_start_twice(self):
         self.room.start()

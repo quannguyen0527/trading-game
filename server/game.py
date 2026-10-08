@@ -22,7 +22,7 @@ import random
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 from engine import OrderBook, Side, Trade
 
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 STARTING_CASH = 10_000_00  # $10,000.00
 STARTING_SHARES = 100
 STARTING_PRICE = 100_00  # $100.00, used for net worth before any trade
+STARTING_NET_WORTH = STARTING_CASH + STARTING_SHARES * STARTING_PRICE
 MAX_QTY = 10_000
 MAX_RECENT_TRADES = 50
 ROUND_SECONDS = 180
@@ -108,6 +109,8 @@ class Room:
         self.started_at = self.clock()
         self.ends_at = self.started_at + ROUND_SECONDS
         self._schedule_news(self.started_at)
+        self.price_history.append((0, self.last_price))
+        self.fair_history.append((0, self.fair_value))
         for bot in self.bots:
             bot.reset(self.started_at)
 
@@ -129,6 +132,7 @@ class Room:
             return True
         for bot in self.bots:
             changed |= bot.act(self, now)
+        self._record_price(now)
         return changed
 
     def seconds_left(self) -> int:
@@ -162,6 +166,10 @@ class Room:
         if price is None and side == Side.BUY:
             # A market buy has no price, so we can't check it against buying power.
             raise OrderRejected("market buys are not supported yet; set a limit price")
+
+        if price is None and self.book.best_bid() is None:
+            # Otherwise the market sell would silently fill nothing.
+            raise OrderRejected("no buyers in the book right now; set a limit price")
 
         if side == Side.BUY and qty * price > self.buying_power(name):
             raise OrderRejected("not enough cash for this order")
@@ -206,9 +214,16 @@ class Room:
             "room": self.id,
             "phase": self.phase.value,
             "seconds_left": self.seconds_left(),
+            "round_seconds": ROUND_SECONDS,
             "last_price": self.last_price,
             # Secret until the round ends; revealing it early would give the game away.
             "fair_value": self.fair_value if self.phase == Phase.FINISHED else None,
+            # One point per second for the chart: [second, price in cents].
+            "price_history": [list(point) for point in self.price_history],
+            "fair_history": (
+                [list(point) for point in self.fair_history]
+                if self.phase == Phase.FINISHED else None
+            ),
             "news": [
                 {"headline": n.headline, "second": n.second,
                  "change_pct": n.change_pct if self.phase == Phase.FINISHED else None}
@@ -238,6 +253,7 @@ class Room:
             "buying_power": self.buying_power(name),
             "sellable_shares": self.sellable_shares(name),
             "net_worth": self.net_worth(name),
+            "pnl": self.net_worth(name) - STARTING_NET_WORTH,
             "open_orders": [
                 {"id": o.id, "side": o.side.value, "price": o.price, "remaining": o.remaining}
                 for o in self.book.open_orders(name)
@@ -252,6 +268,8 @@ class Room:
         self.news: List[NewsItem] = []
         self.last_price = STARTING_PRICE
         self.fair_value = STARTING_PRICE
+        self.price_history: List[Tuple[int, int]] = []  # (second, last price), one per second
+        self.fair_history: List[Tuple[int, int]] = []   # (second, fair value) at each headline
 
     def _schedule_news(self, after: float) -> None:
         self.next_news_at = after + self.rng.uniform(*NEWS_EVERY)
@@ -259,12 +277,20 @@ class Room:
     def _publish_news(self, at: float) -> None:
         headline, pct = self.rng.choice(NEWS)
         self.fair_value = max(MIN_FAIR_VALUE, round(self.fair_value * (100 + pct) / 100))
-        self.news.append(NewsItem(headline, pct, int(at - self.started_at)))
+        second = int(at - self.started_at)
+        self.news.append(NewsItem(headline, pct, second))
+        self.fair_history.append((second, self.fair_value))
+
+    def _record_price(self, now: float) -> None:
+        second = min(int(now - self.started_at), ROUND_SECONDS)
+        if second > self.price_history[-1][0]:
+            self.price_history.append((second, self.last_price))
 
     def _finish(self) -> None:
         for name in self.accounts:
             for order in self.book.open_orders(name):
                 self.book.cancel(order.id)
+        self._record_price(self.ends_at)
         self.phase = Phase.FINISHED
 
     def _account(self, name: str) -> Account:

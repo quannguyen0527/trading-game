@@ -3,138 +3,100 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Trading Game</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
-    .row { display: flex; gap: 24px; flex-wrap: wrap; }
-    .row > div { flex: 1; min-width: 240px; }
-    table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-    td, th { padding: 2px 8px; text-align: right; border-bottom: 1px solid #ddd; }
-    .bid { color: #137333; } .ask { color: #c5221f; }
-    #error { color: #c5221f; min-height: 1.2em; }
-    input { width: 80px; }
-    #round { display: flex; gap: 16px; align-items: center; padding: 8px 12px; background: #f1f3f4; border-radius: 6px; }
-    #clock { font-size: 1.4em; font-variant-numeric: tabular-nums; }
-    #news li { margin-bottom: 4px; }
-    .up { color: #137333; } .down { color: #c5221f; }
-  </style>
+  <title>BYOU Trading Game</title>
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <h1>Bayou Energy (BYOU) <small id="last"></small></h1>
-
-  <form id="join">
-    Room <input id="room" value="lobby" /> Name <input id="name" placeholder="your name" />
-    <button>Join</button>
-  </form>
-
-  <div id="game" hidden>
-    <div id="round">
-      <span id="clock"></span>
-      <span id="status"></span>
-      <button id="start">Start round</button>
-    </div>
-    <p id="me"></p>
-    <form id="order">
-      <select id="side"><option value="buy">Buy</option><option value="sell">Sell</option></select>
-      Qty <input id="qty" type="number" min="1" value="10" />
-      Price $ <input id="price" type="number" step="0.01" placeholder="blank = market" />
-      <button>Place order</button>
+  <div id="join-screen" class="center">
+    <form id="join" class="card join-card">
+      <div class="brand"><span class="ticker">BYOU</span> Bayou Energy</div>
+      <h1>Read the news. Beat the bots.</h1>
+      <p class="muted">
+        A real-time multiplayer trading game. Headlines move the stock's hidden fair value;
+        when the 3-minute round ends, every share is settled at that value.
+      </p>
+      <label>Your name <input id="name" maxlength="20" autocomplete="off" placeholder="e.g. quan" required /></label>
+      <label>Room <input id="room" maxlength="20" value="lobby" required /></label>
+      <button class="btn primary">Join room</button>
+      <p class="muted small">Share the room name with friends to play together.</p>
     </form>
-    <p id="error"></p>
-
-    <div><h3>News</h3><ul id="news"></ul></div>
-
-    <div class="row">
-      <div><h3>Order book</h3><table id="book"></table></div>
-      <div><h3>Leaderboard</h3><table id="leaders"></table></div>
-    </div>
-    <div class="row">
-      <div><h3>Your open orders</h3><table id="mine"></table></div>
-      <div><h3>Recent trades</h3><table id="trades"></table></div>
-    </div>
   </div>
 
-  <script>
-    const $ = (id) => document.getElementById(id);
-    const money = (cents) => "$" + (cents / 100).toFixed(2);
-    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-    let ws;
-    let roundEndsAt = 0;  // local time the round ends, from the server's seconds_left
+  <div id="game" hidden>
+    <header class="topbar">
+      <div class="brand"><span class="ticker">BYOU</span> Bayou Energy</div>
+      <div class="quote">
+        <span id="last" class="price">$100.00</span>
+        <span id="change" class="change"></span>
+      </div>
+      <div class="spacer"></div>
+      <span id="room-name" class="muted small"></span>
+      <div id="clock" class="clock">3:00</div>
+      <button id="start" class="btn primary">Start round</button>
+    </header>
 
-    setInterval(() => {
-      if (roundEndsAt) {
-        const s = Math.max(0, Math.ceil((roundEndsAt - Date.now()) / 1000));
-        $("clock").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-      }
-    }, 250);
+    <div id="banner" class="banner"></div>
 
-    $("join").onsubmit = (e) => {
-      e.preventDefault();
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://${location.host}/ws/${encodeURIComponent($("room").value)}?name=${encodeURIComponent($("name").value)}`;
-      ws = new WebSocket(url);
-      ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "error") $("error").textContent = msg.message;
-        if (msg.type === "state") { $("error").textContent = ""; render(msg); }
-      };
-      ws.onclose = () => { $("error").textContent ||= "Disconnected."; };
-    };
+    <main class="layout">
+      <section class="card chart-card">
+        <div class="card-title">
+          Price
+          <span class="legend">
+            <span class="key price-key">Last trade</span>
+            <span id="fair-key" class="key fair-key" hidden>Fair value</span>
+          </span>
+        </div>
+        <canvas id="chart"></canvas>
+      </section>
 
-    $("order").onsubmit = (e) => {
-      e.preventDefault();
-      const price = $("price").value;
-      ws.send(JSON.stringify({
-        type: "order",
-        side: $("side").value,
-        qty: parseInt($("qty").value, 10),
-        price: price === "" ? null : Math.round(parseFloat(price) * 100),
-      }));
-    };
+      <section class="card ticket">
+        <div class="card-title">Your position</div>
+        <div class="networth"><span id="networth">$20,000.00</span><span id="pnl" class="change"></span></div>
+        <dl class="stats">
+          <dt>Cash</dt><dd id="cash"></dd>
+          <dt>Shares</dt><dd id="shares"></dd>
+          <dt>Buying power</dt><dd id="power"></dd>
+          <dt>Sellable</dt><dd id="sellable"></dd>
+        </dl>
+        <form id="order" class="order-form">
+          <label>Quantity <input id="qty" type="number" min="1" step="1" value="10" /></label>
+          <label>Limit price ($) <input id="price" type="number" min="0.01" step="0.01" placeholder="blank = market sell" /></label>
+          <div class="buttons">
+            <button type="button" class="btn buy" data-side="buy">Buy</button>
+            <button type="button" class="btn sell" data-side="sell">Sell</button>
+          </div>
+          <p class="muted small">Tip: click a price in the order book to fill it in.</p>
+        </form>
+      </section>
 
-    $("start").onclick = () => ws.send(JSON.stringify({ type: "start" }));
+      <section class="card news-card">
+        <div class="card-title">News</div>
+        <ul id="news" class="news"></ul>
+      </section>
 
-    function cancel(id) { ws.send(JSON.stringify({ type: "cancel", order_id: id })); }
+      <section class="card book-card">
+        <div class="card-title">Order book</div>
+        <table id="book" class="book"></table>
+      </section>
 
-    function render({ public: pub, you }) {
-      $("join").hidden = true;
-      $("game").hidden = false;
-      $("last").textContent = "· last " + money(pub.last_price);
-      const running = pub.phase === "running";
-      roundEndsAt = running ? Date.now() + pub.seconds_left * 1000 : 0;
-      if (!running) $("clock").textContent = "";
-      $("start").hidden = running;
-      $("order").hidden = !running;
-      $("status").textContent =
-        running ? "Round in progress: read the news, trade before everyone else."
-        : pub.phase === "finished" ? `Round over! Fair value was ${money(pub.fair_value)}; shares are valued at that price.`
-        : "Press Start when everyone has joined. Shares settle at a hidden fair value that news moves.";
+      <section class="card leaders-card">
+        <div class="card-title">Leaderboard</div>
+        <table id="leaders" class="table"></table>
+      </section>
 
-      $("news").innerHTML = pub.news.slice().reverse().map((n) => {
-        const t = `${Math.floor(n.second / 60)}:${String(n.second % 60).padStart(2, "0")}`;
-        const impact = n.change_pct === null ? ""
-          : ` <b class="${n.change_pct > 0 ? "up" : "down"}">${n.change_pct > 0 ? "+" : ""}${n.change_pct}%</b>`;
-        return `<li>[${t}] ${esc(n.headline)}${impact}</li>`;
-      }).join("") || "<li>No news yet.</li>";
+      <section class="card orders-card">
+        <div class="card-title">Your open orders</div>
+        <table id="mine" class="table"></table>
+      </section>
 
-      $("me").textContent = `${you.name} — cash ${money(you.cash)} · shares ${you.shares} · net worth ${money(you.net_worth)}`;
+      <section class="card tape-card">
+        <div class="card-title">Recent trades</div>
+        <table id="trades" class="table"></table>
+      </section>
+    </main>
+  </div>
 
-      const asks = pub.book.asks.slice().reverse()
-        .map((l) => `<tr class="ask"><td>${money(l.price)}</td><td>${l.qty}</td></tr>`).join("");
-      const bids = pub.book.bids
-        .map((l) => `<tr class="bid"><td>${money(l.price)}</td><td>${l.qty}</td></tr>`).join("");
-      $("book").innerHTML = "<tr><th>Price</th><th>Qty</th></tr>" + asks + bids;
-
-      $("leaders").innerHTML = pub.leaderboard
-        .map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}</td><td>${money(r.net_worth)}</td></tr>`).join("");
-
-      $("mine").innerHTML = you.open_orders
-        .map((o) => `<tr><td>${o.side}</td><td>${o.remaining}</td><td>${money(o.price)}</td>
-                     <td><button onclick="cancel(${o.id})">Cancel</button></td></tr>`).join("");
-
-      $("trades").innerHTML = pub.trades.slice().reverse()
-        .map((t) => `<tr><td>${esc(t.buyer)} ← ${esc(t.seller)}</td><td>${t.qty}</td><td>${money(t.price)}</td></tr>`).join("");
-    }
-  </script>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/static/app.js"></script>
 </body>
 </html>

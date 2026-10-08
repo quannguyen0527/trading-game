@@ -24,6 +24,7 @@ from typing import Dict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .bots import add_bots
 from .game import OrderRejected, Phase, Room
@@ -33,6 +34,7 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="Trading Game")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 rooms: Dict[str, Room] = {}
 # room id -> player name -> that player's open WebSocket
 connections: Dict[str, Dict[str, WebSocket]] = {}
