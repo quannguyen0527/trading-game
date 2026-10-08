@@ -2,6 +2,8 @@
 
 [![tests](https://github.com/quannguyen0527/trading-game/actions/workflows/tests.yml/badge.svg)](https://github.com/quannguyen0527/trading-game/actions/workflows/tests.yml)
 
+**▶ Play it live: https://byou-trading-game.onrender.com** (free hosting, so the first visit may take 30–60 seconds while the server wakes up)
+
 A multiplayer stock-trading game built on a from-scratch **limit order book matching engine**. Players join a room, start with $10,000 and 100 shares of Bayou Energy (BYOU), and trade against each other in real time over WebSockets.
 
 ## How to play
@@ -98,4 +100,4 @@ tests/                 engine, game-rule, bot and WebSocket tests
 - [x] Bot traders so the market is active when you play alone
 - [x] Polished UI with a live price chart
 - [ ] Port the matching engine to C++ (pybind11) and benchmark the speedup
-- [x] Deploy config (Render Blueprint, health check, CI)
+- [x] Deploy online (Render, auto-deploys from `main`; GitHub Actions runs the tests)
