@@ -1,5 +1,7 @@
 # Real-Time Multiplayer Trading Game
 
+[![tests](https://github.com/quannguyen0527/trading-game/actions/workflows/tests.yml/badge.svg)](https://github.com/quannguyen0527/trading-game/actions/workflows/tests.yml)
+
 A multiplayer stock-trading game built on a from-scratch **limit order book matching engine**. Players join a room, start with $10,000 and 100 shares of Bayou Energy (BYOU), and trade against each other in real time over WebSockets.
 
 ## How to play
@@ -22,7 +24,7 @@ You're never alone: every room has three **bot traders**. A market maker always 
 - **Real-time updates:** every player sees the order book, trades, news, and leaderboard update instantly.
 - **Live price chart drawn on a plain `<canvas>`** (no chart library). When the round ends it overlays the hidden fair value, so you can see how fast the market priced in each headline.
 - **Trading-terminal UI:** order book with depth bars (click a price to use it), one-click Buy/Sell, position and P&L panel, and a layout that works on phones.
-- **38 unit and integration tests**, including two simulated players trading over live WebSocket connections, a fake clock that plays a full 3-minute round instantly, and a check that a full round of bot trading never creates or destroys cash or shares.
+- **43 unit and integration tests**, run by GitHub Actions on every push, including two simulated players trading over live WebSocket connections, a fake clock that plays a full 3-minute round instantly, and a check that a full round of bot trading never creates or destroys cash or shares.
 
 ## How the matching engine works
 
@@ -51,7 +53,17 @@ You're never alone: every room has three **bot traders**. A market maker always 
 - **Bots are ordinary accounts.** They place orders through `Room.place_order`, so they can't break the cash and share rules. Their names (`[bot] maker`) contain characters human names can't use, so nobody can log in as a bot.
 - **Settling at fair value, not last price,** stops a player from winning by printing one trade at a silly price just before the bell.
 - **Market buys are disabled for now:** without a price, an order's cost can't be checked against buying power up front. Planned fix: reserve cash against the current best ask. A market sell with no buyers in the book is rejected with a message instead of silently doing nothing.
+- **Safe to run on the public internet:** caps on rooms (50) and players per room (20), a per-connection rate limit (10 messages/second), and empty rooms are deleted so memory can't grow forever.
+- **One process by design.** Game state lives in memory, which keeps every order fast and the code simple, but means the server can't be split across several processes. Scaling out would mean pinning each room to one server, or moving state to something like Redis.
 - **The chart's data is sampled once a second on the server,** so a round's history is at most 181 points no matter how many trades happen, and every broadcast stays small.
+
+## Deploy
+
+The repo includes a [Render](https://render.com) Blueprint (`render.yaml`): connect the GitHub repo in Render, and every push to `main` deploys automatically. Any host that runs a long-lived Python process with WebSockets works with the start command:
+
+```bash
+uvicorn server.app:app --host 0.0.0.0 --port $PORT
+```
 
 ## Run it locally
 
@@ -86,4 +98,4 @@ tests/                 engine, game-rule, bot and WebSocket tests
 - [x] Bot traders so the market is active when you play alone
 - [x] Polished UI with a live price chart
 - [ ] Port the matching engine to C++ (pybind11) and benchmark the speedup
-- [ ] Deploy online
+- [x] Deploy config (Render Blueprint, health check, CI)

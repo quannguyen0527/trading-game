@@ -1,0 +1,11 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: byou-trading-game
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # One process only: rooms live in memory, so a second worker would split players apart.
+    startCommand: uvicorn server.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true

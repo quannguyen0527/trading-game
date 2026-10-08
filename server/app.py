@@ -14,11 +14,16 @@ The server runs on a single asyncio event loop, and no handler awaits while it i
 changing a room, so two players' orders can never interleave half-way through.
 Each running round also has a clock task on the same loop that calls room.tick()
 once a second, so news and the end of the round arrive without anyone acting.
+
+All state lives in this process's memory, so the server must run as a single
+process. Limits on rooms, players and message rate keep one visitor from
+using up that memory or CPU, and empty rooms are deleted.
 """
 from __future__ import annotations
 
 import asyncio
 import re
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -30,6 +35,9 @@ from .bots import add_bots
 from .game import OrderRejected, Phase, Room
 
 TICK_SECONDS = 1.0
+MAX_ROOMS = 50
+MAX_PLAYERS_PER_ROOM = 20           # humans; bots don't count
+MAX_MESSAGES_PER_SECOND = 10        # per connection
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -47,6 +55,12 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/health")
+def health() -> dict:
+    """Used by the hosting platform to check the server is up."""
+    return {"status": "ok", "rooms": len(rooms)}
+
+
 @app.websocket("/ws/{room_id}")
 async def play(websocket: WebSocket, room_id: str, name: str = "") -> None:
     await websocket.accept()
@@ -54,22 +68,38 @@ async def play(websocket: WebSocket, room_id: str, name: str = "") -> None:
     if not NAME_PATTERN.match(name) or not NAME_PATTERN.match(room_id):
         await _close_with_error(websocket, "names: 1-20 letters, numbers, - or _")
         return
-    room_conns = connections.setdefault(room_id, {})
-    if name in room_conns:
+    if name in connections.get(room_id, {}):
         await _close_with_error(websocket, f"'{name}' is already playing in this room")
         return
 
     room = rooms.get(room_id)
     if room is None:
+        if len(rooms) >= MAX_ROOMS:
+            await _close_with_error(websocket, "the server is full; try again later")
+            return
         room = rooms[room_id] = Room(room_id)
         add_bots(room)
+    if name not in room.accounts and len(room.accounts) - len(room.bots) >= MAX_PLAYERS_PER_ROOM:
+        await _close_with_error(websocket, "this room is full; try another room name")
+        return
     room.join(name)
+    room_conns = connections.setdefault(room_id, {})
     room_conns[name] = websocket
     await _broadcast(room)
 
+    window_start, count = time.monotonic(), 0
     try:
         while True:
             message = await websocket.receive_json()
+            # Fixed-window rate limit: at most MAX_MESSAGES_PER_SECOND each second.
+            now = time.monotonic()
+            if now - window_start >= 1:
+                window_start, count = now, 0
+            count += 1
+            if count > MAX_MESSAGES_PER_SECOND:
+                if count == MAX_MESSAGES_PER_SECOND + 1:
+                    await websocket.send_json({"type": "error", "message": "slow down: too many orders"})
+                continue
             try:
                 _handle(room, name, message)
             except OrderRejected as e:
@@ -81,7 +111,9 @@ async def play(websocket: WebSocket, room_id: str, name: str = "") -> None:
         pass
     finally:
         room_conns.pop(name, None)
-        # The account stays in the room so the player can reconnect with the same name.
+        # The account stays in the room so the player can reconnect with the same name,
+        # unless everyone has left; then the room is deleted.
+        _delete_if_empty(room)
 
 
 def _handle(room: Room, name: str, message: object) -> None:
@@ -107,6 +139,17 @@ async def _run_clock(room: Room) -> None:
         await asyncio.sleep(TICK_SECONDS)
         if room.tick():
             await _broadcast(room)
+    _delete_if_empty(room)
+
+
+def _delete_if_empty(room: Room) -> None:
+    """Forget a room nobody is connected to, once no round is running in it."""
+    if connections.get(room.id) or room.phase == Phase.RUNNING:
+        return  # a running round is cleaned up by its clock task when it ends
+    if rooms.get(room.id) is room:
+        del rooms[room.id]
+        connections.pop(room.id, None)
+        clock_tasks.pop(room.id, None)
 
 
 async def _broadcast(room: Room) -> None:

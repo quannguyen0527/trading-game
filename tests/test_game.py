@@ -242,6 +242,40 @@ class TestWebSocket(unittest.TestCase):
             self.assertEqual(final["phase"], "finished")
             self.assertEqual(final["fair_value"], STARTING_PRICE)
 
+    def test_health_check(self):
+        self.assertEqual(self.client.get("/health").json()["status"], "ok")
+
+    def test_room_is_deleted_when_everyone_leaves(self):
+        with self.client.websocket_connect("/ws/r5?name=alice") as alice:
+            alice.receive_json()
+            self.assertIn("r5", app_module.rooms)
+        self.assertNotIn("r5", app_module.rooms)
+
+    def test_server_refuses_new_rooms_when_full(self):
+        with mock.patch.object(app_module, "MAX_ROOMS", 1), \
+             self.client.websocket_connect("/ws/r6?name=alice") as alice:
+            alice.receive_json()
+            with self.client.websocket_connect("/ws/r7?name=bob") as bob:
+                self.assertIn("full", bob.receive_json()["message"])
+            self.assertNotIn("r7", app_module.rooms)
+
+    def test_room_refuses_players_when_full(self):
+        with mock.patch.object(app_module, "MAX_PLAYERS_PER_ROOM", 1), \
+             self.client.websocket_connect("/ws/r8?name=alice") as alice:
+            alice.receive_json()
+            with self.client.websocket_connect("/ws/r8?name=bob") as bob:
+                self.assertIn("full", bob.receive_json()["message"])
+
+    def test_rate_limit(self):
+        with mock.patch.object(app_module, "MAX_MESSAGES_PER_SECOND", 2), \
+             self.client.websocket_connect("/ws/r9?name=alice") as alice:
+            alice.receive_json()
+            for _ in range(3):
+                alice.send_json({"type": "cancel", "order_id": 999})
+            messages = [alice.receive_json()["message"] for _ in range(3)]
+            self.assertEqual(messages[:2], ["no open order with that id"] * 2)
+            self.assertIn("slow down", messages[2])
+
     def test_duplicate_name_is_refused(self):
         with self.client.websocket_connect("/ws/r3?name=alice") as first:
             first.receive_json()
